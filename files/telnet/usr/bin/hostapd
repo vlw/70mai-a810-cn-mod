@@ -1,0 +1,8 @@
+#!/bin/sh
+# Telnet hook: /usr/bin comes before /mnt/app/bin in PATH, so starting the camera AP passes here.
+# Starts a810-telnetd in the background, then runs the stock hostapd with the same arguments.
+case "$1" in
+    ''|-h|-v|stop) ;;
+    *) /bin/sh /usr/bin/a810-telnetd </dev/null >/dev/null 2>&1 & ;;
+esac
+exec /mnt/app/bin/hostapd "$@"

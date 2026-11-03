@@ -1,0 +1,79 @@
+#!/bin/sh
+# GNSS warm start for the CC1161W: main_app reloads the module firmware (cc116_tool) on every GPS
+# init, so the module always starts cold. After each load, feed it UTC time and the last fixed
+# position ($AIDTIME / $AIDPOS, answered with $OK). The position is saved every 5 minutes from the
+# stock GPS log. Disable with: touch /usr/bin/70mai-gps-warm.disabled
+STATE=/mnt/other/gps_lastpos
+UART=/dev/ttyS2
+LOG=/var/run/70mai-gps-warm.log
+[ -e /usr/bin/70mai-gps-warm.disabled ] && exit 0
+
+# Kernel clock shows local time under the fixed CST-8 TZ: UTC = kernel + 8h - zone offset (param 20).
+utc_now() {
+    p=$(pidof main_app) || return 1
+    a=$((0x1a26860 + 4 * (0x1026 + 20)))
+    tz=$(dd if=/proc/$p/mem bs=4 skip=$((a / 4)) count=1 2>/dev/null | od -An -tu4 | tr -d ' ')
+    off=480; i=1
+    for o in -720 -660 -600 -540 -480 -420 -360 -300 -240 -210 -180 -120 -60 0 60 120 180 210 240 270 \
+             300 330 345 360 390 420 480 540 570 600 630 660 720 780 840; do
+        [ "$i" = "$tz" ] && off=$o
+        i=$((i + 1))
+    done
+    [ "$tz" = 24 ] && off=480        # CN firmware treats enum 24 as UTC+8
+    date -u -d @$(( $(date -u +%s) + (480 - off) * 60 )) +%Y,%m,%d,%H,%M,%S
+}
+
+save_pos() {
+    f=$(ls -t /mnt/sd/GPSData*.txt 2>/dev/null | head -1)
+    [ -n "$f" ] || return
+    l=$(tail -n 60 "$f" | grep -a ',A,' | tail -1)
+    [ -n "$l" ] || return
+    pos=$(echo "$l" | cut -d, -f3,4 | tr -d ' ')
+    [ "$pos" = "$(cat $STATE 2>/dev/null)" ] || echo "$pos" > $STATE
+}
+
+aid() {
+    t=$(utc_now) || return
+    printf '\044AIDTIME,%s,0\r\n' "$t" > $UART
+    if [ -s $STATE ]; then
+        lat=$(cut -d, -f1 $STATE); lon=$(cut -d, -f2 $STATE)
+        ns=N; ew=E
+        case $lat in -*) ns=S; lat=${lat#-};; esac
+        case $lon in -*) ew=W; lon=${lon#-};; esac
+        sleep 1
+        printf '\044AIDPOS,%s,%s,%s,%s,150.0\r\n' "$lat" "$ns" "$lon" "$ew" > $UART
+    fi
+    echo "$(date) aid time $t pos $(cat $STATE 2>/dev/null)" >> $LOG
+}
+
+case "$1" in
+    start)
+        mkdir /var/run/70mai-gps-warm.lock 2>/dev/null || exit 0
+        "$0" run </dev/null >/dev/null 2>&1 &
+        exit 0
+        ;;
+    run) ;;
+    *) exit 2 ;;
+esac
+
+seen=0; tick=0
+# The boot hook runs late (S99): if the first firmware load already happened, aid right away.
+n=0
+while [ $n -lt 10 ] && ! pidof cc116_tool >/dev/null 2>&1; do sleep 2; n=$((n + 1)); done
+if [ $n -ge 10 ]; then
+    while ! pidof main_app >/dev/null 2>&1; do sleep 2; done
+    sleep 3
+    aid
+fi
+while true; do
+    if pidof cc116_tool >/dev/null 2>&1; then
+        seen=1
+    elif [ $seen = 1 ]; then
+        seen=0
+        sleep 2
+        aid                                   # module firmware was just (re)loaded
+    fi
+    tick=$((tick + 1))
+    [ $((tick % 150)) = 0 ] && save_pos       # every ~5 min
+    sleep 2
+done

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Boot hook: S99_Sysctl runs 'swapon /dev/zram0' with /usr/bin first in PATH.
+[ -x /usr/bin/70mai-gps-warm ] && /usr/bin/70mai-gps-warm start
+exec /sbin/swapon "$@"

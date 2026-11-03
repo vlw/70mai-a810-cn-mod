@@ -1,0 +1,9 @@
+# stock firmware is proprietary: never commit it
+input/*
+!input/README.md
+out/
+unpacked/
+config.env
+__pycache__/
+.DS_Store
+*.pyc

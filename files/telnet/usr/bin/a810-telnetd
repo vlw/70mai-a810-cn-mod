@@ -1,0 +1,19 @@
+#!/bin/sh
+# Root telnet on the camera AP only (192.168.0.1:23), started by the hostapd hook.
+# Disable: touch /mnt/sd/telnet.off (the SD card) and restart the camera.
+LOG=/var/run/a810-telnetd.log
+[ -e /mnt/sd/telnet.off ] && exit 0
+mkdir /var/run/a810-telnetd.lock 2>/dev/null || exit 0       # one waiter at a time
+trap 'rmdir /var/run/a810-telnetd.lock' 0
+i=0
+while [ $i -lt 60 ]; do
+    if /sbin/ifconfig wlan0 2>/dev/null | grep -q 'inet addr:192.168.0.1 '; then
+        pidof telnetd >/dev/null && exit 0
+        /usr/sbin/telnetd -b 192.168.0.1 -p 23 >>$LOG 2>&1
+        echo "$(date) telnetd started" >>$LOG
+        exit 0
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+echo "$(date) no 192.168.0.1 on wlan0 within 60 s" >>$LOG
